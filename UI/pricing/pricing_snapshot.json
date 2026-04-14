@@ -1,0 +1,32 @@
+{
+  "snapshot_version": "2026-04-14",
+  "currency": "USD",
+  "unit": "per_1k_tokens",
+  "notes": "Rates are maintained snapshots from official pricing pages. Update this file when vendors adjust pricing.",
+  "models": {
+    "gpt-4o": {
+      "provider": "openai",
+      "prompt_per_1k": 0.005,
+      "completion_per_1k": 0.015,
+      "source_url": "https://openai.com/pricing"
+    },
+    "claude-sonnet-4-6": {
+      "provider": "anthropic",
+      "prompt_per_1k": 0.003,
+      "completion_per_1k": 0.015,
+      "source_url": "https://www.anthropic.com/pricing#api"
+    },
+    "gemini-2.5-flash": {
+      "provider": "google",
+      "prompt_per_1k": 0.00035,
+      "completion_per_1k": 0.00105,
+      "source_url": "https://ai.google.dev/gemini-api/docs/pricing"
+    },
+    "qwen-plus": {
+      "provider": "qwen",
+      "prompt_per_1k": 0.0008,
+      "completion_per_1k": 0.002,
+      "source_url": "https://www.alibabacloud.com/help/en/model-studio/getting-started/models"
+    }
+  }
+}

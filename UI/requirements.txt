@@ -1,0 +1,2 @@
+# Intelligent Shopping Assistant (app.py) — Python 3.10+
+streamlit>=1.33.0
