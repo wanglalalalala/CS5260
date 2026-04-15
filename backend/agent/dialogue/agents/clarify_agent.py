@@ -32,9 +32,26 @@ class ClarifyAgent(BaseAgent):
 
         question = decision.get("question") or _DEFAULT_QUESTION
         delta = decision.get("state_delta") or {}
+        raw_suggestions = decision.get("suggestions") or []
+        suggestions: list[str] = []
+        seen: set[str] = set()
+        for s in raw_suggestions:
+            if not isinstance(s, str):
+                continue
+            text = s.strip()
+            if not text or len(text) > 40:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            suggestions.append(text)
+            if len(suggestions) >= 4:
+                break
 
         return AgentOutput(
             state_delta=delta,
             reply=question,
             next_action="clarify",
+            payload={"suggestions": suggestions},
         )

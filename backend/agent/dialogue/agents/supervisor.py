@@ -21,6 +21,13 @@ _DIRECT_ACTION_KEYWORDS = {
     "detail":   ("details", "spec", "specs", "specifications", "tell me more"),
 }
 
+# Low-information replies — the user agreed with something but didn't tell
+# us what to change. Route to clarify so we ask them to be specific.
+_LOW_INFO_REPLIES = {
+    "yes", "yeah", "yep", "ok", "okay", "sure", "please", "go ahead",
+    "no", "nope", "not really",
+}
+
 
 class SupervisorAgent(BaseAgent):
     name = "supervisor"
@@ -31,7 +38,7 @@ class SupervisorAgent(BaseAgent):
     # ── Rule fast-path ──────────────────────────────────────
 
     def _rule_route(self, state: DialogueState, msg: str) -> tuple[str | None, list[str]]:
-        lower = msg.lower()
+        lower = msg.lower().strip(" .?!")
 
         # Direct-action keywords only fire if we have something to act on.
         for action, keywords in _DIRECT_ACTION_KEYWORDS.items():
@@ -45,8 +52,24 @@ class SupervisorAgent(BaseAgent):
                     ids = [state.last_products[0]["id"], state.last_products[1]["id"]]
                 return action, ids
 
-        # Force-search if we've been clarifying too long.
-        if state.clarify_count >= 2 and state.category:
+        # Low-information reply after a search ("yes", "ok", ...) — the user
+        # agreed in principle but gave us no new constraint. Ask them to be
+        # specific instead of re-running the exact same search.
+        if state.has_searched and lower in _LOW_INFO_REPLIES:
+            return "clarify", []
+
+        # Force-search if we've been clarifying too long — but only once we
+        # have at least the category to anchor retrieval.
+        if state.clarify_count >= 3 and state.category:
+            return "search", []
+
+        # Fast-path to search when we have a category plus at least one
+        # HARD constraint — or the user explicitly opted out of a budget.
+        # Only on the first search; once we have results, require NEW info
+        # before re-searching, otherwise we'd loop on the same query.
+        if not state.has_searched and state.category and (
+            state.brand or state.max_price is not None or state.budget_skipped
+        ):
             return "search", []
 
         return None, []

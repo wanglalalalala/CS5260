@@ -1,2 +1,10 @@
 # Intelligent Shopping Assistant (app.py) — Python 3.10+
 streamlit>=1.33.0
+
+# Backend deps (so frontend can import backend.agent.dialogue in real mode)
+openai>=1.40.0
+langgraph>=0.2.0
+python-dotenv
+chromadb
+sentence-transformers
+datasets

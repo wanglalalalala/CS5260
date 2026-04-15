@@ -35,6 +35,7 @@ class DialogueState:
     min_price: Optional[float] = None
     min_rating: Optional[float] = None
     required_specs: dict[str, str] = field(default_factory=dict)
+    budget_skipped: bool = False            # user said "no budget / any price"
 
     # --- dialogue control ---
     history: list[tuple[str, str]] = field(default_factory=list)   # [(role, text), ...]
@@ -58,6 +59,7 @@ class DialogueState:
             "min_price": self.min_price,
             "min_rating": self.min_rating,
             "required_specs": self.required_specs,
+            "budget_skipped": self.budget_skipped,
             "has_searched": self.has_searched,
             "clarify_count": self.clarify_count,
             "num_last_products": len(self.last_products),
@@ -71,6 +73,7 @@ class DialogueState:
 _SLOT_KEYS = {
     "category", "subcategory", "brand", "use_case",
     "max_price", "min_price", "min_rating", "required_specs",
+    "budget_skipped",
 }
 
 

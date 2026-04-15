@@ -2,14 +2,37 @@ from __future__ import annotations
 
 import html
 import json
+import os
+import sys
 import time
 import uuid
-from typing import Dict, List
+from pathlib import Path
+from typing import Dict, List, Optional
 
 import streamlit as st
 
-from services.mock_agent import generate_reply, stream_text
-from utils.token_logger import TokenLogger
+# Make backend importable and trigger its .env autoload before we read any keys.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_BACKEND = _REPO_ROOT / "backend"
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+from services import real_agent  # noqa: E402
+from utils.token_logger import TokenLogger  # noqa: E402
+
+
+# Shortcut cards shown on the first turn. `query` is the text we feed the
+# agent — kept as a plain product-type keyword so ClarifyAgent can infer
+# the canonical `category` slot itself.
+CATEGORY_CARDS = [
+    {"label": "Headphones",   "emoji": "🎧", "query": "headphones"},
+    {"label": "Laptops",      "emoji": "💻", "query": "laptop"},
+    {"label": "Smartphones",  "emoji": "📱", "query": "smartphone"},
+    {"label": "Tablets",      "emoji": "📲", "query": "tablet"},
+    {"label": "Smartwatches", "emoji": "⌚", "query": "smartwatch"},
+    {"label": "Cameras",      "emoji": "📷", "query": "camera"},
+    {"label": "Speakers",     "emoji": "🔊", "query": "speaker"},
+]
 
 
 st.set_page_config(
@@ -24,9 +47,7 @@ st.markdown(
     """
 <style>
 .block-container { padding-top: 2.6rem; padding-bottom: 7rem; max-width: 1200px; }
-[data-testid="stMain"] {
-    background: #b2b4b9;
-}
+[data-testid="stMain"] { background: #b2b4b9; }
 [data-testid="stMainBlockContainer"] {
     background: transparent;
     border-radius: 0;
@@ -37,9 +58,7 @@ st.markdown(
     background: #e7eaf4;
     border-right: 1px solid rgba(99, 102, 241, 0.22);
 }
-[data-testid="stSidebarContent"] {
-    background: #e7eaf4;
-}
+[data-testid="stSidebarContent"] { background: #e7eaf4; }
 [data-testid="stSidebar"] > div:first-child {
     padding-top: 0.2rem;
     max-height: 100vh;
@@ -125,9 +144,6 @@ st.markdown(
     font-size: 0.72rem;
     font-weight: 600;
 }
-div[data-testid="stPopover"] button p {
-    font-size: 0.78rem !important;
-}
 div[data-testid="stChatMessage"] {
     border: 1px solid rgba(99, 102, 241, 0.18);
     border-radius: 14px;
@@ -138,8 +154,6 @@ div[data-testid="stChatMessage"] {
 div[data-testid="stChatInput"] {
     position: sticky;
     bottom: 0.9rem;
-    left: auto;
-    transform: none;
     width: 100%;
     max-width: 100%;
     z-index: 1000;
@@ -148,18 +162,6 @@ div[data-testid="stChatInput"] {
     border-radius: 12px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
     padding: 0.15rem 0.35rem;
-}
-section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] {
-    margin-bottom: 0.35rem;
-}
-section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button {
-    border: 1px solid rgba(99, 102, 241, 0.28);
-    border-radius: 12px;
-    background: color-mix(in srgb, var(--background-color) 92%, #e0e7ff);
-}
-section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-testid="stButton"] > button:hover {
-    border-color: rgba(99, 102, 241, 0.46);
-    background: color-mix(in srgb, var(--background-color) 84%, #ddd6fe);
 }
 @media (max-width: 900px) {
     .block-container { padding-top: 2rem; }
@@ -172,6 +174,64 @@ section[data-testid="stSidebar"] div[data-testid="stVerticalBlock"] > div[data-t
 )
 
 
+# ─────────────────────────────────────────────────────────────
+# Provider resolution
+# ─────────────────────────────────────────────────────────────
+
+def _hydrate_env_from_secrets() -> None:
+    """Copy Streamlit secrets into env so backend llm.py can read them.
+
+    Accessing `st.secrets` raises StreamlitSecretNotFoundError when no
+    secrets file is present (normal for local dev — we fall back to .env).
+    """
+    for key in ("LLM_PROVIDER", "OPENAI_API_KEY", "DASHSCOPE_API_KEY",
+                "DASHSCOPE_REGION", "DASHSCOPE_BASE_URL", "HF_TOKEN"):
+        if os.environ.get(key):
+            continue
+        try:
+            value = st.secrets[key]
+        except Exception:
+            continue
+        if value:
+            os.environ[key] = str(value)
+
+
+def _resolve_provider_status() -> tuple[bool, str, str]:
+    """
+    Returns (ok, provider, message).
+
+    backend/llm.py already loads backend/.env on import, so by the time we
+    call this, os.environ reflects the user's configuration.
+    """
+    provider = (os.environ.get("LLM_PROVIDER") or "").lower().strip()
+    if not provider:
+        return False, "", (
+            "LLM_PROVIDER is not set. Add it to `backend/.env` or Streamlit "
+            "secrets — one of `openai` or `qwen`."
+        )
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            return False, provider, (
+                "OPENAI_API_KEY is missing. Set it in `backend/.env` or "
+                "Streamlit secrets."
+            )
+        return True, provider, "openai"
+    if provider == "qwen":
+        if not os.environ.get("DASHSCOPE_API_KEY"):
+            return False, provider, (
+                "DASHSCOPE_API_KEY is missing. Set it in `backend/.env` or "
+                "Streamlit secrets."
+            )
+        return True, provider, "qwen"
+    return False, provider, (
+        f"Unsupported LLM_PROVIDER=`{provider}`. Use `openai` or `qwen`."
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# Session state
+# ─────────────────────────────────────────────────────────────
+
 def init_state() -> None:
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
@@ -180,9 +240,13 @@ def init_state() -> None:
             {
                 "role": "assistant",
                 "content": (
-                    "Hi! I am your AI shopping assistant. "
-                    "Tell me your budget and use case, for example: "
-                    "'Need wireless headphones under $200 for work calls'."
+                    "Hi! I am your AI shopping assistant. I can help you "
+                    "find **consumer electronics** — laptops, headphones, "
+                    "smartphones, tablets, smartwatches, cameras, and similar "
+                    "gadgets.\n\n"
+                    "Tell me what you're looking for, ideally with budget, "
+                    "brand, or use case. For example: "
+                    "_\"Noise-cancelling headphones under $200 for work calls\"_."
                 ),
             }
         ]
@@ -192,26 +256,6 @@ def init_state() -> None:
         st.session_state.recommended_items = []
     if "token_logger" not in st.session_state:
         st.session_state.token_logger = TokenLogger()
-    if "model_name_input" not in st.session_state:
-        st.session_state.model_name_input = "gpt-4o"
-    if "api_key_input" not in st.session_state:
-        st.session_state.api_key_input = ""
-    if "backend_mode" not in st.session_state:
-        st.session_state.backend_mode = "mock"
-    if "show_settings_welcome" not in st.session_state:
-        st.session_state.show_settings_welcome = True
-    if "config_confirmed" not in st.session_state:
-        st.session_state.config_confirmed = False
-    if "configured_model" not in st.session_state:
-        st.session_state.configured_model = ""
-    if "configured_api_key" not in st.session_state:
-        st.session_state.configured_api_key = ""
-    if "configured_backend_mode" not in st.session_state:
-        st.session_state.configured_backend_mode = "mock"
-    if "config_feedback" not in st.session_state:
-        st.session_state.config_feedback = None
-    if "sidebar_settings_open" not in st.session_state:
-        st.session_state.sidebar_settings_open = False
 
 
 def _clear_session() -> None:
@@ -219,124 +263,30 @@ def _clear_session() -> None:
     st.session_state.applied_filters = []
     st.session_state.recommended_items = []
     st.session_state.token_logger.reset_session()
+    real_agent.reset_agent()
     st.rerun()
 
 
-def _apply_backend_configuration(model_name: str, api_key: str, backend_mode: str) -> tuple[bool, str]:
-    model_name = model_name.strip()
-    if not model_name:
-        return False, "Please enter a model name."
-    if backend_mode.startswith("real") and not api_key.strip():
-        return False, "API key is required when using real backend mode."
-    # Placeholder for future backend setup call.
-    return True, f"Configuration applied: {model_name} ({backend_mode})."
+# ─────────────────────────────────────────────────────────────
+# Sidebar (filters / recommendations / token usage)
+# ─────────────────────────────────────────────────────────────
 
-
-def _render_settings_controls(hide_welcome_on_confirm: bool = False) -> Dict[str, str]:
-    st.markdown("### Session Controls")
-    model_name = st.text_input(
-        "Model Name",
-        key="model_name_input",
-        placeholder="e.g. gpt-4o-mini",
-    )
-    api_key = st.text_input(
-        "API Key",
-        key="api_key_input",
-        type="password",
-        placeholder="Enter your provider API key",
-    )
-    if api_key:
-        st.caption("API key provided.")
-    else:
-        st.caption("Enter API key when connecting real backend.")
-    backend_mode = st.radio(
-        "Backend",
-        options=["mock", "real (not connected yet)"],
-        key="backend_mode",
-        horizontal=True,
-    )
-    if st.button("Clear Session", use_container_width=True):
-        _clear_session()
-
-    if st.button("Confirm Configuration", type="primary", use_container_width=True):
-        with st.spinner("Applying backend configuration..."):
-            ok, message = _apply_backend_configuration(model_name, api_key, backend_mode)
-        if ok:
-            st.session_state.config_confirmed = True
-            st.session_state.configured_model = model_name
-            st.session_state.configured_api_key = api_key
-            st.session_state.configured_backend_mode = backend_mode
-            st.session_state.config_feedback = ("success", message)
-            st.success(message)
-            countdown = st.empty()
-            for sec in [3, 2, 1]:
-                countdown.info(f"Configuration successful. Auto closing in {sec}s...")
-                time.sleep(1)
-            if hide_welcome_on_confirm:
-                st.session_state.show_settings_welcome = False
-            else:
-                st.session_state.sidebar_settings_open = False
-            st.rerun()
-        else:
-            st.session_state.config_confirmed = False
-            st.session_state.config_feedback = ("error", message)
-            st.error(message)
-            return {"model": model_name, "api_key": api_key, "backend_mode": backend_mode}
-
-    feedback = st.session_state.config_feedback
-    if feedback:
-        level, message = feedback
-        if level == "success":
-            st.success(message)
-        else:
-            st.error(message)
-
-    return {"model": model_name, "api_key": api_key, "backend_mode": backend_mode}
-
-
-def render_settings_entry(in_sidebar: bool = False) -> Dict[str, str]:
-    if st.session_state.show_settings_welcome and not in_sidebar:
-        with st.container(border=True):
-            left, right = st.columns([10, 1])
-            with left:
-                st.markdown("### Quick Setup")
-                st.caption("Initial settings panel. You can reopen these options from the ⚙ button later.")
-            with right:
-                if st.button("✕", key="close_welcome_settings", help="Close this panel"):
-                    st.session_state.show_settings_welcome = False
-                    st.rerun()
-            return _render_settings_controls(hide_welcome_on_confirm=True)
-
-    if st.session_state.show_settings_welcome and in_sidebar:
-        return {
-            "model": st.session_state.model_name_input,
-            "api_key": st.session_state.api_key_input,
-            "backend_mode": st.session_state.backend_mode,
-        }
-
-    if in_sidebar:
-        label = "⚙ Settings  ▴" if st.session_state.sidebar_settings_open else "⚙ Settings  ▾"
-        if st.button(label, key="toggle_sidebar_settings", use_container_width=False):
-            st.session_state.sidebar_settings_open = not st.session_state.sidebar_settings_open
-            st.rerun()
-        if not st.session_state.sidebar_settings_open:
-            return {
-                "model": st.session_state.model_name_input,
-                "api_key": st.session_state.api_key_input,
-                "backend_mode": st.session_state.backend_mode,
-            }
-        with st.container(border=True):
-            return _render_settings_controls()
-
-    return _render_settings_controls()
-
-
-def render_sidebar_panels() -> Dict[str, str]:
+def render_sidebar_panels(provider_label: str) -> None:
     with st.sidebar:
-        settings = render_settings_entry(in_sidebar=True)
+        st.markdown(
+            f'<div class="sidebar-module panel">'
+            f'<div class="sidebar-title">Backend</div>'
+            f'<div class="sidebar-muted">Provider: <b>{html.escape(provider_label)}</b></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("Clear Session", use_container_width=True):
+            _clear_session()
+
         if st.session_state.applied_filters:
             tags = "".join(
-                [f'<span class="filter-tag">{html.escape(value)}</span>' for value in st.session_state.applied_filters]
+                [f'<span class="filter-tag">{html.escape(value)}</span>'
+                 for value in st.session_state.applied_filters]
             )
         else:
             tags = '<div class="sidebar-muted">No active filters yet.</div>'
@@ -352,13 +302,11 @@ def render_sidebar_panels() -> Dict[str, str]:
             cards = []
             for item in st.session_state.recommended_items[:3]:
                 cards.append(
-                    (
-                        '<div class="item-card">'
-                        f'<div class="item-name">{html.escape(item["name"])}</div>'
-                        f'<div class="item-meta">{html.escape(item["brand"])} | ${item["price"]:.0f} | ⭐ {item["rating"]:.1f}</div>'
-                        f'<div class="item-reason">{html.escape(item["short_reason"])}</div>'
-                        "</div>"
-                    )
+                    '<div class="item-card">'
+                    f'<div class="item-name">{html.escape(item["name"])}</div>'
+                    f'<div class="item-meta">{html.escape(item["brand"])} | ${item["price"]:.0f} | ⭐ {item["rating"]:.1f}</div>'
+                    f'<div class="item-reason">{html.escape(item["short_reason"])}</div>'
+                    "</div>"
                 )
             rec_body = "".join(cards)
         else:
@@ -392,21 +340,11 @@ def render_sidebar_panels() -> Dict[str, str]:
             "</div>",
             unsafe_allow_html=True,
         )
-    return settings
 
-def run_agent(
-    user_message: str,
-    history: List[Dict[str, str]],
-    model_name: str,
-    backend_mode: str,
-) -> Dict[str, object]:
-    if backend_mode.startswith("mock"):
-        return generate_reply(user_message=user_message, history=history)
-    raise NotImplementedError(
-        "Real backend adapter is not connected yet. "
-        "Switch backend mode to mock for now."
-    )
 
+# ─────────────────────────────────────────────────────────────
+# Chat rendering
+# ─────────────────────────────────────────────────────────────
 
 def render_reasoning_panel(reasoning: List[str], tools: List[Dict[str, object]]) -> None:
     if not reasoning and not tools:
@@ -429,17 +367,62 @@ def render_reasoning_panel(reasoning: List[str], tools: List[Dict[str, object]])
                 )
 
 
-def render_chat() -> None:
-    for msg in st.session_state.messages:
+def _escape_dollars_for_label(text: str) -> str:
+    """Escape unescaped `$` in a short label so Streamlit's Markdown
+    renderer doesn't interpret it as a LaTeX math delimiter."""
+    out = []
+    for i, ch in enumerate(text):
+        if ch == "$" and (i == 0 or text[i - 1] != "\\"):
+            out.append("\\$")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
+def render_chat() -> Optional[str]:
+    """Render history. Return a suggestion-chip query if the user clicked one."""
+    messages = st.session_state.messages
+    last_assistant_idx = max(
+        (i for i, m in enumerate(messages) if m.get("role") == "assistant"),
+        default=-1,
+    )
+    clicked: Optional[str] = None
+    for idx, msg in enumerate(messages):
         with st.chat_message(msg["role"]):
             if msg.get("role") == "assistant":
                 reasoning = msg.get("reasoning_trace", [])
                 tools = msg.get("tool_calls", [])
                 render_reasoning_panel(reasoning, tools)
             st.markdown(msg["content"])
+            if (
+                msg.get("role") == "assistant"
+                and idx == last_assistant_idx
+                and msg.get("suggestions")
+            ):
+                suggestions = msg["suggestions"]
+                cols = st.columns(len(suggestions))
+                for col, text in zip(cols, suggestions):
+                    # Escape unescaped `$` so Streamlit's Markdown renderer
+                    # doesn't treat "$500 ... $1,000" as a LaTeX formula.
+                    label = _escape_dollars_for_label(text)
+                    if col.button(
+                        label,
+                        key=f"sug_{idx}_{text}",
+                        use_container_width=True,
+                    ):
+                        clicked = text
+    return clicked
 
+
+# ─────────────────────────────────────────────────────────────
+# Main
+# ─────────────────────────────────────────────────────────────
 
 def main() -> None:
+    _hydrate_env_from_secrets()
+    # Importing backend triggers its .env loader.
+    import agent.dialogue.llm  # noqa: F401
+
     init_state()
 
     st.markdown(
@@ -447,46 +430,73 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    if st.session_state.show_settings_welcome:
-        render_settings_entry(in_sidebar=False)
-
-    settings = render_sidebar_panels()
-    render_chat()
-
-    if st.session_state.config_confirmed:
-        configured_model = st.session_state.configured_model
-        configured_backend_mode = st.session_state.configured_backend_mode
-        user_input = st.chat_input("Describe what you want to buy...")
-    else:
-        configured_model = settings["model"]
-        configured_backend_mode = settings["backend_mode"]
-        user_input = st.chat_input(
-            "Please confirm settings before chatting.",
-            disabled=True,
+    ok, provider, message = _resolve_provider_status()
+    if not ok:
+        st.error(
+            f"**Backend not configured.** {message}\n\n"
+            "Example `backend/.env`:\n\n"
+            "```\nLLM_PROVIDER=qwen\nDASHSCOPE_API_KEY=your_key_here\n```"
         )
+        render_sidebar_panels(provider_label=provider or "not configured")
+        render_chat()
+        st.chat_input("Configure backend to start chatting.", disabled=True)
+        return
 
+    # Figure out the display model name for the token logger.
+    display_model = (
+        os.environ.get("LLM_MODEL")
+        or ("gpt-4o-mini" if provider == "openai" else "qwen-plus")
+    )
+
+    render_sidebar_panels(provider_label=f"{provider} · {display_model}")
+    suggestion_pick = render_chat()
+
+    # First turn only: show a horizontal row of category shortcut buttons.
+    # `len(messages) == 1` means only the welcome message is present.
+    category_pick: str | None = None
+    if len(st.session_state.messages) == 1:
+        st.markdown("<div style='margin: 0.4rem 0 0.2rem; opacity: 0.8;'>"
+                    "Or pick a category to get started:</div>",
+                    unsafe_allow_html=True)
+        cols = st.columns(len(CATEGORY_CARDS))
+        for col, card in zip(cols, CATEGORY_CARDS):
+            if col.button(
+                f"{card['emoji']}\n\n{card['label']}",
+                key=f"cat_{card['label']}",
+                use_container_width=True,
+            ):
+                category_pick = card["query"]
+
+    typed_input = st.chat_input("Describe the electronics you want (e.g. laptop, headphones)...")
+    user_input = typed_input or category_pick or suggestion_pick
     if not user_input:
         return
 
+    _run_turn(user_input, display_model)
+
+
+def _run_turn(user_input: str, display_model: str) -> None:
     st.session_state.messages.append({"role": "user", "content": user_input})
     with st.chat_message("user"):
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            response = run_agent(
-                user_message=user_input,
-                history=st.session_state.messages,
-                model_name=configured_model,
-                backend_mode=configured_backend_mode,
-            )
+            try:
+                response = real_agent.generate_reply(
+                    user_message=user_input,
+                    history=st.session_state.messages,
+                )
+            except Exception as exc:
+                st.error(f"Backend error: {exc}")
+                return
         reasoning = response.get("reasoning_trace", [])
         tools = response.get("tool_calls", [])
         render_reasoning_panel(reasoning, tools)
         placeholder = st.empty()
         text = str(response.get("assistant_reply", "No response"))
         assembled = ""
-        for chunk in stream_text(text):
+        for chunk in real_agent.stream_text(text):
             assembled += chunk
             placeholder.markdown(assembled + "▌")
             time.sleep(0.02)
@@ -498,13 +508,16 @@ def main() -> None:
             "content": assembled,
             "reasoning_trace": response.get("reasoning_trace", []),
             "tool_calls": response.get("tool_calls", []),
+            "suggestions": response.get("suggestions", []),
         }
     )
     st.session_state.applied_filters = response.get("applied_filters", [])
     st.session_state.recommended_items = response.get("recommended_items", [])
     usage = response.get("usage", {})
     st.session_state.token_logger.log_from_usage(
-        usage=usage, model=configured_model, metadata={"session_id": st.session_state.session_id}
+        usage=usage,
+        model=display_model,
+        metadata={"session_id": st.session_state.session_id},
     )
     st.rerun()
 

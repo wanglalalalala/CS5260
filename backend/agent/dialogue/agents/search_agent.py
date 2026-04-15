@@ -58,8 +58,19 @@ class SearchAgent(BaseAgent):
         result = rag_search(rewritten, constraints=constraints)
         products = result.products
 
-        # Step 4 — narrate via the responder LLM (grounded in real products).
+        # Step 4 — enrich the top-3 with description from SQLite so the
+        # responder can write grounded AI commentary (not just list fields).
         if products:
+            from rag.retriever import get_products_by_ids
+
+            top_ids = [p["id"] for p in products[:3]]
+            full = {r["id"]: r for r in get_products_by_ids(top_ids)}
+            for p in products[:3]:
+                record = full.get(p["id"]) or {}
+                desc = (record.get("description") or "")[:400]
+                if desc:
+                    p["description"] = desc
+
             reply = self.llm.call_text(
                 system=RESPONDER_SYSTEM,
                 user=responder_user(result.constraints_applied, products),

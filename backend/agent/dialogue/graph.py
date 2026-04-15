@@ -44,7 +44,13 @@ class GraphState(TypedDict, total=False):
 # ─────────────────────────────────────────────────────────────
 
 def _compare_node(gs: GraphState) -> GraphState:
-    from rag.pipeline import compare
+    from rag.retriever import get_products_by_ids
+    from .llm import get_client
+    from .prompts import (
+        COMPARE_SUMMARY_SYSTEM,
+        compare_summary_user,
+        _NOISY_SPEC_KEYS,
+    )
 
     ids = gs.get("referenced_ids") or []
     if len(ids) < 2:
@@ -54,8 +60,28 @@ def _compare_node(gs: GraphState) -> GraphState:
         )
         return gs
 
-    table = compare(ids)
-    gs["reply"] = _render_compare_table(table)
+    products = get_products_by_ids(ids)
+    if len(products) < 2:
+        gs["reply"] = "Couldn't load enough product details to compare."
+        gs["debug"] = {"compared_ids": ids}
+        return gs
+
+    table_md = _render_compare_table_md(products, _NOISY_SPEC_KEYS)
+
+    try:
+        summary = get_client().call_text(
+            system=COMPARE_SUMMARY_SYSTEM,
+            user=compare_summary_user(products),
+        )
+    except Exception:
+        summary = ""
+
+    parts = [table_md]
+    if summary.strip():
+        parts.append(summary.strip())
+    parts.append("_Reply with 'buy the first one' or ask me to tighten the search._")
+
+    gs["reply"] = "\n\n".join(parts)
     gs["debug"] = {"compared_ids": ids}
     return gs
 
@@ -115,7 +141,10 @@ def _make_clarify_node(agent: ClarifyAgent):
         merge_delta(state, out.state_delta)
         state.clarify_count += 1
         gs["reply"] = out.reply or ""
-        gs["debug"] = {"agent": "clarify"}
+        gs["debug"] = {
+            "agent": "clarify",
+            "suggestions": out.payload.get("suggestions", []),
+        }
         return gs
     return node
 
@@ -181,18 +210,65 @@ def build_graph():
 # Lightweight renderers for tool nodes
 # ─────────────────────────────────────────────────────────────
 
-def _render_compare_table(table: dict) -> str:
-    cols = table.get("columns", [])
-    rows = table.get("rows", [])
-    if not cols or not rows:
+def _render_compare_table_md(products: list[dict], noisy_keys: set[str]) -> str:
+    """Render a clean side-by-side Markdown table for 2-3 products."""
+    if not products:
         return "No overlap found to compare."
 
-    lines = ["Here's a side-by-side look:"]
-    for row in rows[:10]:
-        field = row.get("field", "")
-        values = " | ".join(str(row.get(c, ""))[:40] for c in cols)
-        lines.append(f"- {field}: {values}")
-    lines.append("Want me to recommend one, or narrow the specs further?")
+    def _label(p: dict) -> str:
+        brand = (p.get("brand") or "").strip() or "—"
+        model = (p.get("model") or "").strip()
+        return f"{brand} {model}".strip() or "Product"
+
+    def _fmt_price(v) -> str:
+        if v is None or v == "" or v == -1:
+            return "N/A"
+        try:
+            return f"\\${float(v):.2f}"
+        except (TypeError, ValueError):
+            return str(v)
+
+    def _fmt_rating(p: dict) -> str:
+        r = p.get("rating")
+        n = p.get("rating_count") or 0
+        if not r:
+            return "—"
+        return f"⭐ {float(r):.1f} ({int(n)})"
+
+    def _truncate(v, width: int = 42) -> str:
+        s = str(v) if v not in (None, "") else "—"
+        return s if len(s) <= width else s[: width - 1] + "…"
+
+    headers = ["Field"] + [_label(p) for p in products]
+    rows: list[list[str]] = []
+    rows.append(["Title"] + [_truncate(p.get("title"), 60) for p in products])
+    rows.append(["Price"] + [_fmt_price(p.get("price")) for p in products])
+    rows.append(["Rating"] + [_fmt_rating(p) for p in products])
+
+    # Spec rows: only include keys that appear in at least 2 products and
+    # are not in the noise list.
+    from collections import Counter
+    counts: Counter = Counter()
+    for p in products:
+        specs = p.get("specifications") or {}
+        for k in specs:
+            if k.lower() in noisy_keys:
+                continue
+            counts[k] += 1
+    shared_keys = [k for k, c in counts.items() if c >= 2][:6]
+    for key in shared_keys:
+        row = [key]
+        for p in products:
+            specs = p.get("specifications") or {}
+            row.append(_truncate(specs.get(key, "—")))
+        rows.append(row)
+
+    # Build Markdown table.
+    lines = ["**Side-by-side comparison:**", ""]
+    lines.append("| " + " | ".join(headers) + " |")
+    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
+    for r in rows:
+        lines.append("| " + " | ".join(r) + " |")
     return "\n".join(lines)
 
 
