@@ -26,3 +26,6 @@ backend/data/products_clean.json
 
 # ── Streamlit ───────────────────────────────────────────
 .streamlit/secrets.toml
+
+# ── Docs build helpers / artifacts ──────────────────────
+backend/docs/generate_project_overview_pdf.py

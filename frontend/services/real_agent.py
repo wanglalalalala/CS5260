@@ -171,10 +171,8 @@ def generate_reply(
             }
         )
 
-    suggestions = []
-    if turn.route == "clarify":
-        raw = debug.get("suggestions") or []
-        suggestions = [s for s in raw if isinstance(s, str) and s.strip()]
+    raw = debug.get("suggestions") or []
+    suggestions = [s for s in raw if isinstance(s, str) and s.strip()]
 
     return {
         "assistant_reply": _escape_dollars(turn.reply or ""),
