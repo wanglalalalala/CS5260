@@ -1,0 +1,28 @@
+# ── Secrets ─────────────────────────────────────────────
+.env
+.env.local
+*.key
+
+# ── Python ──────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ── Generated data / indexes ────────────────────────────
+backend/data/chroma_db/
+backend/data/products.db
+backend/data/products_clean.json
+
+# ── IDE / OS ────────────────────────────────────────────
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# ── Logs ────────────────────────────────────────────────
+*.log
+
+# ── Streamlit ───────────────────────────────────────────
+.streamlit/secrets.toml
