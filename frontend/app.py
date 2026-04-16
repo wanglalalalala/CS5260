@@ -468,6 +468,25 @@ def _resolve_provider_status() -> tuple[bool, str, str]:
 # ─────────────────────────────────────────────────────────────
 
 def init_state() -> None:
+    default_provider = (os.environ.get("LLM_PROVIDER") or "openai").lower().strip()
+    if default_provider not in PROVIDER_OPTIONS:
+        default_provider = "openai"
+
+    if st.session_state.pop("reset_settings_requested", False):
+        st.session_state.provider_input = default_provider
+        st.session_state.last_provider_input = default_provider
+        st.session_state.model_name_input = PROVIDER_DEFAULT_MODEL[default_provider]
+        st.session_state.api_key_input = ""
+        st.session_state.qwen_region_input = os.environ.get("DASHSCOPE_REGION", "cn")
+        st.session_state.config_confirmed = False
+        st.session_state.configured_provider = default_provider
+        st.session_state.configured_model = ""
+        st.session_state.configured_api_key = ""
+        st.session_state.configured_qwen_region = st.session_state.qwen_region_input
+        st.session_state.config_feedback = None
+        st.session_state.show_settings_welcome = True
+        st.session_state.sidebar_settings_open = False
+
     if "session_id" not in st.session_state:
         st.session_state.session_id = str(uuid.uuid4())
     if "messages" not in st.session_state:
@@ -492,10 +511,7 @@ def init_state() -> None:
     if "token_logger" not in st.session_state:
         st.session_state.token_logger = TokenLogger()
     if "provider_input" not in st.session_state:
-        provider = (os.environ.get("LLM_PROVIDER") or "openai").lower().strip()
-        if provider not in PROVIDER_OPTIONS:
-            provider = "openai"
-        st.session_state.provider_input = provider
+        st.session_state.provider_input = default_provider
     if "last_provider_input" not in st.session_state:
         st.session_state.last_provider_input = st.session_state.provider_input
     if "model_name_input" not in st.session_state:
@@ -531,6 +547,21 @@ def _clear_session() -> None:
     st.session_state.applied_filters = []
     st.session_state.recommended_items = []
     st.session_state.token_logger.reset_session()
+
+    # Reset runtime env values applied from the in-app settings panel.
+    for key in (
+        "LLM_PROVIDER",
+        "LLM_MODEL",
+        "OPENAI_API_KEY",
+        "CLAUDE_API_KEY",
+        "GEMINI_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_REGION",
+    ):
+        os.environ.pop(key, None)
+
+    # Defer widget-key resets to the next rerun to avoid StreamlitAPIException.
+    st.session_state.reset_settings_requested = True
     real_agent.reset_agent()
     st.rerun()
 
