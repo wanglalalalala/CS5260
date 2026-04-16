@@ -29,3 +29,6 @@ backend/data/products_clean.json
 
 # ── Docs build helpers / artifacts ──────────────────────
 backend/docs/generate_project_overview_pdf.py
+
+# ── Internal project docs (not for submission) ─────────
+PROJECT_STATUS.md
