@@ -48,6 +48,7 @@ PROVIDER_DEFAULT_MODEL = {
     "gemini": "gemini-2.0-flash",
     "qwen": "qwen-plus",
 }
+DEFAULT_PROVIDER = "openai"
 
 
 st.set_page_config(
@@ -468,16 +469,16 @@ def _resolve_provider_status() -> tuple[bool, str, str]:
 # ─────────────────────────────────────────────────────────────
 
 def init_state() -> None:
-    default_provider = (os.environ.get("LLM_PROVIDER") or "openai").lower().strip()
+    default_provider = DEFAULT_PROVIDER
     if default_provider not in PROVIDER_OPTIONS:
-        default_provider = "openai"
+        default_provider = DEFAULT_PROVIDER
 
     if st.session_state.pop("reset_settings_requested", False):
         st.session_state.provider_input = default_provider
         st.session_state.last_provider_input = default_provider
         st.session_state.model_name_input = PROVIDER_DEFAULT_MODEL[default_provider]
         st.session_state.api_key_input = ""
-        st.session_state.qwen_region_input = os.environ.get("DASHSCOPE_REGION", "cn")
+        st.session_state.qwen_region_input = "cn"
         st.session_state.config_confirmed = False
         st.session_state.configured_provider = default_provider
         st.session_state.configured_model = ""
@@ -515,15 +516,15 @@ def init_state() -> None:
     if "last_provider_input" not in st.session_state:
         st.session_state.last_provider_input = st.session_state.provider_input
     if "model_name_input" not in st.session_state:
-        st.session_state.model_name_input = (
-            os.environ.get("LLM_MODEL")
-            or PROVIDER_DEFAULT_MODEL[st.session_state.provider_input]
-        )
+        st.session_state.model_name_input = PROVIDER_DEFAULT_MODEL[
+            st.session_state.provider_input
+        ]
     if "api_key_input" not in st.session_state:
-        key_env = PROVIDER_KEY_ENV[st.session_state.provider_input]
-        st.session_state.api_key_input = os.environ.get(key_env, "")
+        # Never prefill API keys from process env/secrets into UI fields.
+        # This avoids exposing a previous user's runtime key on refresh/restart.
+        st.session_state.api_key_input = ""
     if "qwen_region_input" not in st.session_state:
-        st.session_state.qwen_region_input = os.environ.get("DASHSCOPE_REGION", "cn")
+        st.session_state.qwen_region_input = "cn"
     if "config_feedback" not in st.session_state:
         st.session_state.config_feedback = None
     if "show_settings_welcome" not in st.session_state:
@@ -941,7 +942,7 @@ def main() -> None:
         render_settings_entry(in_sidebar=False)
 
     ok, provider, message, display_model = render_backend_settings_panel()
-    if not ok:
+    if not (ok and st.session_state.config_confirmed):
         render_sidebar_panels(provider_label=provider or "not configured")
         render_chat()
         st.chat_input("Configure backend to start chatting.", disabled=True)
