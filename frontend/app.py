@@ -179,6 +179,16 @@ html, body, [data-testid="stAppViewContainer"], [data-testid="stMarkdownContaine
     font-weight: 700;
     color: var(--ink-navy);
     margin: 0 0 0.2rem;
+    line-height: 1.3;
+}
+.item-name a.item-link {
+    color: var(--ink-navy);
+    text-decoration: none;
+    border-bottom: 1px solid rgba(214, 138, 46, 0.55);
+}
+.item-name a.item-link:hover {
+    color: #0f3f67;
+    border-bottom-color: rgba(214, 138, 46, 0.9);
 }
 .item-meta {
     font-size: 0.8rem;
@@ -443,7 +453,7 @@ def init_state() -> None:
                     "gadgets.\n\n"
                     "Tell me what you're looking for, ideally with budget, "
                     "brand, or use case. For example: "
-                    "_\"Noise-cancelling headphones under $200 for work calls\"_."
+                    "_\"Noise-cancelling headphones under \\$200 for work calls\"_."
                 ),
             }
         ]
@@ -498,10 +508,27 @@ def render_sidebar_panels(provider_label: str) -> None:
         if st.session_state.recommended_items:
             cards = []
             for item in st.session_state.recommended_items[:3]:
+                name = html.escape(item["name"])
+                url = item.get("url") or ""
+                if url:
+                    name_html = (
+                        f'<a href="{html.escape(url)}" target="_blank" '
+                        f'rel="noopener" class="item-link">{name}</a>'
+                    )
+                else:
+                    name_html = name
+                price_val = item.get("price") or 0
+                if item.get("price_is_estimate"):
+                    price_str = f"~${price_val:.0f} (est.)"
+                elif price_val:
+                    price_str = f"${price_val:.0f}"
+                else:
+                    price_str = "price N/A"
                 cards.append(
                     '<div class="item-card">'
-                    f'<div class="item-name">{html.escape(item["name"])}</div>'
-                    f'<div class="item-meta">{html.escape(item["brand"])} | ${item["price"]:.0f} | ⭐ {item["rating"]:.1f}</div>'
+                    f'<div class="item-name">{name_html}</div>'
+                    f'<div class="item-meta">{html.escape(item["brand"])} · '
+                    f'{html.escape(price_str)} · ⭐ {item["rating"]:.1f}</div>'
                     f'<div class="item-reason">{html.escape(item["short_reason"])}</div>'
                     "</div>"
                 )

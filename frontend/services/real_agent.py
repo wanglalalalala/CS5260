@@ -66,22 +66,39 @@ def _slots_to_filters(state) -> List[str]:
     return tags
 
 
+def _short_reason(p: Dict[str, Any]) -> str:
+    """Prefer the first sentence of the product description as the sidebar
+    blurb (real content), falling back to category/relevance metadata."""
+    desc = (p.get("description") or "").strip()
+    if desc:
+        first = desc.split(". ")[0].strip().rstrip(".")
+        if len(first) > 140:
+            first = first[:137].rstrip() + "…"
+        if len(first) >= 20:
+            return first + "."
+    return (
+        p.get("subcategory")
+        or p.get("main_category")
+        or f"Relevance {p.get('relevance_score', 0):.2f}"
+    )
+
+
 def _products_to_cards(products: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cards = []
     for p in products[:5]:
         price = p.get("price")
         rating = p.get("rating") or 0.0
+        pid = p.get("id") or ""
         cards.append(
             {
+                "id": pid,
                 "name": p.get("title") or p.get("name") or "Unnamed product",
                 "brand": p.get("brand") or "Unknown",
                 "price": float(price) if price else 0.0,
                 "rating": float(rating),
-                "short_reason": (
-                    p.get("subcategory")
-                    or p.get("main_category")
-                    or f"Relevance {p.get('relevance_score', 0):.2f}"
-                ),
+                "short_reason": _short_reason(p),
+                "price_is_estimate": bool(p.get("price_is_estimate")),
+                "url": f"https://www.amazon.com/dp/{pid}" if pid else "",
             }
         )
     return cards

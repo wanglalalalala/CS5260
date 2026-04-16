@@ -279,6 +279,8 @@ Rules for `suggestions`:
   - "Compare #1 and #2"
   - "Show more under $300"
   - "Prefer a different brand"
+- Do NOT escape dollar signs here — just write `$300` naturally; the UI
+  handles escaping when rendering chips.
 - Distinct wording; no duplicates.
 """
 

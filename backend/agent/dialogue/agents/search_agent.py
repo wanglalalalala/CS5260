@@ -72,6 +72,9 @@ def _inject_estimated_prices(products: list[dict]) -> None:
 
 
 def _sanitize_suggestions(raw: list) -> list[str]:
+    """De-dup and length-cap raw chip texts. We keep the raw `$` here and
+    let the front end escape for display — this way the text sent back to
+    the agent on click is the natural user phrasing, not `\\$300`."""
     suggestions: list[str] = []
     seen: set[str] = set()
     for item in raw:
