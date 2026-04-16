@@ -18,8 +18,10 @@ taxonomy each product sits.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import pathlib
+import threading
 from typing import Optional
 
 import chromadb
@@ -32,10 +34,80 @@ EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 _client: chromadb.ClientAPI | None = None
 _collection = None
+_index_ready = False
+_index_lock = threading.Lock()
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = (os.getenv(name) or default).strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _collection_exists(client: chromadb.ClientAPI, name: str) -> bool:
+    try:
+        client.get_collection(name=name)
+        return True
+    except Exception:
+        return False
+
+
+def _index_artifacts_ready() -> bool:
+    if not SQLITE_PATH.exists():
+        return False
+    if not CHROMA_DIR.exists():
+        return False
+    try:
+        client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        return _collection_exists(client, "products")
+    except Exception:
+        return False
+
+
+def _ensure_index_ready() -> None:
+    """
+    Optional startup hook for cloud deployment:
+    build the index automatically when artifacts are missing.
+
+    Controlled by environment variables:
+      AUTO_BUILD_INDEX_ON_START=1   enable auto-build
+      AUTO_BUILD_INDEX_USE_CACHE=1  use local cache only (no HF download)
+    """
+    global _index_ready
+
+    if _index_ready:
+        return
+    if _index_artifacts_ready():
+        _index_ready = True
+        return
+    if not _env_flag("AUTO_BUILD_INDEX_ON_START", "0"):
+        return
+
+    with _index_lock:
+        if _index_ready:
+            return
+        if _index_artifacts_ready():
+            _index_ready = True
+            return
+
+        use_cache = _env_flag("AUTO_BUILD_INDEX_USE_CACHE", "0")
+        print(
+            "RAG index artifacts missing. Auto-building now "
+            f"(use_cache={use_cache}) ..."
+        )
+        from data.build_index import main as build_index_main
+
+        build_index_main(use_cache=use_cache)
+        if not _index_artifacts_ready():
+            raise RuntimeError(
+                "Auto-build finished but RAG index is still unavailable. "
+                "Check backend/data/chroma_db and backend/data/products.db."
+            )
+        _index_ready = True
 
 
 def _get_collection():
     global _client, _collection
+    _ensure_index_ready()
     if _collection is None:
         ef = SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
         _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
@@ -46,6 +118,7 @@ def _get_collection():
 
 
 def _get_db():
+    _ensure_index_ready()
     conn = sqlite3.connect(str(SQLITE_PATH))
     conn.row_factory = sqlite3.Row
     return conn
