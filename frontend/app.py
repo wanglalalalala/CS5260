@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import importlib
 import json
 import os
 import sys
@@ -34,6 +35,20 @@ CATEGORY_CARDS = [
     {"label": "Speakers",     "emoji": "🔊", "query": "speaker"},
 ]
 
+PROVIDER_OPTIONS = ("openai", "claude", "gemini", "qwen")
+PROVIDER_KEY_ENV = {
+    "openai": "OPENAI_API_KEY",
+    "claude": "CLAUDE_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "qwen": "DASHSCOPE_API_KEY",
+}
+PROVIDER_DEFAULT_MODEL = {
+    "openai": "gpt-4o-mini",
+    "claude": "claude-3-5-sonnet-latest",
+    "gemini": "gemini-2.0-flash",
+    "qwen": "qwen-plus",
+}
+
 
 st.set_page_config(
     page_title="AI Personal Shopper",
@@ -47,7 +62,7 @@ st.markdown(
     """
 <style>
 :root {
-    --font-sans: "Inter", "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    --font-sans: "Inter", "SF Pro Text", "Segoe UI", "Helvetica Neue", Arial, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif;
     --ink-navy: #132a3e;
     --ink-navy-soft: #223d56;
     --accent-amber: #d68a2e;
@@ -60,8 +75,16 @@ st.markdown(
 }
 
 html, body, [data-testid="stAppViewContainer"], [data-testid="stMarkdownContainer"],
-[data-testid="stButton"] button, [data-testid="stChatInput"] input, label, p, span {
+[data-testid="stButton"] button, [data-testid="stChatInput"] input, label, p {
     font-family: var(--font-sans) !important;
+}
+
+/* Keep Streamlit's icon ligature fonts intact (do not override to Inter). */
+span.material-symbols-rounded,
+span.material-symbols-outlined,
+span.material-icons,
+[class*="material-symbols"] {
+    font-family: "Material Symbols Rounded", "Material Symbols Outlined", "Material Icons" !important;
 }
 
 .block-container { padding-top: 2.2rem; padding-bottom: 7rem; max-width: 1220px; }
@@ -391,8 +414,18 @@ def _hydrate_env_from_secrets() -> None:
     Accessing `st.secrets` raises StreamlitSecretNotFoundError when no
     secrets file is present (normal for local dev — we fall back to .env).
     """
-    for key in ("LLM_PROVIDER", "OPENAI_API_KEY", "DASHSCOPE_API_KEY",
-                "DASHSCOPE_REGION", "DASHSCOPE_BASE_URL", "HF_TOKEN"):
+    for key in (
+        "LLM_PROVIDER",
+        "LLM_MODEL",
+        "OPENAI_API_KEY",
+        "CLAUDE_API_KEY",
+        "GEMINI_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "DASHSCOPE_REGION",
+        "DASHSCOPE_BASE_URL",
+        "GEMINI_BASE_URL",
+        "HF_TOKEN",
+    ):
         if os.environ.get(key):
             continue
         try:
@@ -414,25 +447,20 @@ def _resolve_provider_status() -> tuple[bool, str, str]:
     if not provider:
         return False, "", (
             "LLM_PROVIDER is not set. Add it to `backend/.env` or Streamlit "
-            "secrets — one of `openai` or `qwen`."
+            "secrets — choose one of: openai / claude / gemini / qwen."
         )
-    if provider == "openai":
-        if not os.environ.get("OPENAI_API_KEY"):
-            return False, provider, (
-                "OPENAI_API_KEY is missing. Set it in `backend/.env` or "
-                "Streamlit secrets."
-            )
-        return True, provider, "openai"
-    if provider == "qwen":
-        if not os.environ.get("DASHSCOPE_API_KEY"):
-            return False, provider, (
-                "DASHSCOPE_API_KEY is missing. Set it in `backend/.env` or "
-                "Streamlit secrets."
-            )
-        return True, provider, "qwen"
-    return False, provider, (
-        f"Unsupported LLM_PROVIDER=`{provider}`. Use `openai` or `qwen`."
-    )
+    key_env = PROVIDER_KEY_ENV.get(provider)
+    if not key_env:
+        return False, provider, (
+            f"Unsupported LLM_PROVIDER=`{provider}`. Use one of: "
+            "openai / claude / gemini / qwen."
+        )
+    if not os.environ.get(key_env):
+        return False, provider, (
+            f"{key_env} is missing. Set it in `backend/.env`, Streamlit "
+            "secrets, or apply it in the sidebar."
+        )
+    return True, provider, provider
 
 
 # ─────────────────────────────────────────────────────────────
@@ -463,6 +491,39 @@ def init_state() -> None:
         st.session_state.recommended_items = []
     if "token_logger" not in st.session_state:
         st.session_state.token_logger = TokenLogger()
+    if "provider_input" not in st.session_state:
+        provider = (os.environ.get("LLM_PROVIDER") or "openai").lower().strip()
+        if provider not in PROVIDER_OPTIONS:
+            provider = "openai"
+        st.session_state.provider_input = provider
+    if "last_provider_input" not in st.session_state:
+        st.session_state.last_provider_input = st.session_state.provider_input
+    if "model_name_input" not in st.session_state:
+        st.session_state.model_name_input = (
+            os.environ.get("LLM_MODEL")
+            or PROVIDER_DEFAULT_MODEL[st.session_state.provider_input]
+        )
+    if "api_key_input" not in st.session_state:
+        key_env = PROVIDER_KEY_ENV[st.session_state.provider_input]
+        st.session_state.api_key_input = os.environ.get(key_env, "")
+    if "qwen_region_input" not in st.session_state:
+        st.session_state.qwen_region_input = os.environ.get("DASHSCOPE_REGION", "cn")
+    if "config_feedback" not in st.session_state:
+        st.session_state.config_feedback = None
+    if "show_settings_welcome" not in st.session_state:
+        st.session_state.show_settings_welcome = True
+    if "config_confirmed" not in st.session_state:
+        st.session_state.config_confirmed = False
+    if "configured_provider" not in st.session_state:
+        st.session_state.configured_provider = st.session_state.provider_input
+    if "configured_model" not in st.session_state:
+        st.session_state.configured_model = st.session_state.model_name_input
+    if "configured_api_key" not in st.session_state:
+        st.session_state.configured_api_key = st.session_state.api_key_input
+    if "configured_qwen_region" not in st.session_state:
+        st.session_state.configured_qwen_region = st.session_state.qwen_region_input
+    if "sidebar_settings_open" not in st.session_state:
+        st.session_state.sidebar_settings_open = False
 
 
 def _clear_session() -> None:
@@ -472,6 +533,190 @@ def _clear_session() -> None:
     st.session_state.token_logger.reset_session()
     real_agent.reset_agent()
     st.rerun()
+
+
+def _apply_runtime_backend_config(
+    provider: str,
+    model_name: str,
+    api_key: str,
+    qwen_region: str,
+) -> tuple[bool, str]:
+    provider = (provider or "").strip().lower()
+    model_name = (model_name or "").strip()
+    api_key = (api_key or "").strip()
+    if provider not in PROVIDER_OPTIONS:
+        return False, "Please choose one provider from openai / claude / gemini / qwen."
+    if not model_name:
+        return False, "Model name cannot be empty."
+    if not api_key:
+        return False, "API key cannot be empty."
+
+    key_env = PROVIDER_KEY_ENV[provider]
+    os.environ["LLM_PROVIDER"] = provider
+    os.environ["LLM_MODEL"] = model_name
+    os.environ[key_env] = api_key
+
+    if provider == "qwen":
+        os.environ["DASHSCOPE_REGION"] = qwen_region or "cn"
+
+    dialogue_llm = importlib.import_module("agent.dialogue.llm")
+    # Streamlit may keep an older in-memory module during hot reload; support
+    # both new and old backend builds when resetting the singleton client.
+    dialogue_llm = importlib.reload(dialogue_llm)
+    if hasattr(dialogue_llm, "reset_client"):
+        dialogue_llm.reset_client()
+    elif hasattr(dialogue_llm, "_default_client"):
+        dialogue_llm._default_client = None
+    real_agent.reset_agent()
+    return True, f"Applied {provider} with model `{model_name}`."
+
+
+def _render_settings_controls(hide_welcome_on_confirm: bool = False) -> Dict[str, str]:
+    st.markdown("### Session Controls")
+    provider = st.selectbox(
+        "Provider",
+        options=list(PROVIDER_OPTIONS),
+        key="provider_input",
+        format_func=lambda x: x.upper(),
+    )
+    if st.session_state.last_provider_input != provider:
+        prev_provider = st.session_state.last_provider_input
+        prev_default = PROVIDER_DEFAULT_MODEL.get(prev_provider, "")
+        if (
+            not st.session_state.model_name_input
+            or st.session_state.model_name_input == prev_default
+        ):
+            st.session_state.model_name_input = PROVIDER_DEFAULT_MODEL[provider]
+        st.session_state.api_key_input = ""
+        st.session_state.last_provider_input = provider
+
+    model_name = st.text_input(
+        "Model Name",
+        key="model_name_input",
+        placeholder=PROVIDER_DEFAULT_MODEL[provider],
+    )
+    api_key = st.text_input(
+        f"{PROVIDER_KEY_ENV[provider]}",
+        key="api_key_input",
+        type="password",
+        placeholder="Enter API key",
+    )
+    if api_key:
+        st.caption("API key provided.")
+    else:
+        st.caption("Please enter an API key for the selected provider.")
+
+    qwen_region = st.session_state.qwen_region_input
+    if provider == "qwen":
+        qwen_region = st.selectbox(
+            "Qwen Region",
+            options=["cn", "intl"],
+            key="qwen_region_input",
+            help="cn uses the mainland endpoint, intl uses the global endpoint.",
+        )
+
+    if st.button("Clear Session", use_container_width=True):
+        _clear_session()
+
+    if st.button("Confirm Configuration", type="primary", use_container_width=True):
+        with st.spinner("Applying backend configuration..."):
+            ok, message = _apply_runtime_backend_config(
+                provider=provider,
+                model_name=model_name,
+                api_key=api_key,
+                qwen_region=qwen_region,
+            )
+        st.session_state.config_feedback = ("success" if ok else "error", message)
+        if ok:
+            st.session_state.config_confirmed = True
+            st.session_state.configured_provider = provider
+            st.session_state.configured_model = model_name
+            st.session_state.configured_api_key = api_key
+            st.session_state.configured_qwen_region = qwen_region
+            countdown = st.empty()
+            for sec in [3, 2, 1]:
+                countdown.info(f"Configuration successful. Auto closing in {sec}s...")
+                time.sleep(1)
+            if hide_welcome_on_confirm:
+                st.session_state.show_settings_welcome = False
+            else:
+                st.session_state.sidebar_settings_open = False
+            st.rerun()
+        else:
+            st.session_state.config_confirmed = False
+
+    feedback = st.session_state.config_feedback
+    if feedback:
+        level, message = feedback
+        if level == "success":
+            st.success(message)
+        else:
+            st.error(message)
+
+    return {
+        "provider": provider,
+        "model": model_name,
+        "api_key": api_key,
+        "qwen_region": qwen_region,
+    }
+
+
+def render_settings_entry(in_sidebar: bool = False) -> Dict[str, str]:
+    if st.session_state.show_settings_welcome and not in_sidebar:
+        with st.container(border=True):
+            left, right = st.columns([10, 1])
+            with left:
+                st.markdown("### Quick Setup")
+                st.caption(
+                    "Initial settings panel. You can reopen these options from the "
+                    "sidebar Settings button."
+                )
+            with right:
+                if st.button("✕", key="close_welcome_settings", help="Close this panel"):
+                    st.session_state.show_settings_welcome = False
+                    st.rerun()
+            return _render_settings_controls(hide_welcome_on_confirm=True)
+
+    if st.session_state.show_settings_welcome and in_sidebar:
+        return {
+            "provider": st.session_state.provider_input,
+            "model": st.session_state.model_name_input,
+            "api_key": st.session_state.api_key_input,
+            "qwen_region": st.session_state.qwen_region_input,
+        }
+
+    if in_sidebar:
+        label = (
+            "⚙ Settings  ▴"
+            if st.session_state.sidebar_settings_open
+            else "⚙ Settings  ▾"
+        )
+        if st.button(label, key="toggle_sidebar_settings", use_container_width=False):
+            st.session_state.sidebar_settings_open = not st.session_state.sidebar_settings_open
+            st.rerun()
+        if not st.session_state.sidebar_settings_open:
+            return {
+                "provider": st.session_state.provider_input,
+                "model": st.session_state.model_name_input,
+                "api_key": st.session_state.api_key_input,
+                "qwen_region": st.session_state.qwen_region_input,
+            }
+        with st.container(border=True):
+            return _render_settings_controls()
+
+    return _render_settings_controls()
+
+
+def render_backend_settings_panel() -> tuple[bool, str, str, str]:
+    with st.sidebar:
+        render_settings_entry(in_sidebar=True)
+
+    ok, active_provider, message = _resolve_provider_status()
+    display_model = os.environ.get("LLM_MODEL") or PROVIDER_DEFAULT_MODEL.get(
+        active_provider or st.session_state.provider_input,
+        "unknown",
+    )
+    return ok, active_provider, message, display_model
 
 
 # ─────────────────────────────────────────────────────────────
@@ -487,8 +732,6 @@ def render_sidebar_panels(provider_label: str) -> None:
             f'</div>',
             unsafe_allow_html=True,
         )
-        if st.button("Clear Session", use_container_width=True):
-            _clear_session()
 
         if st.session_state.applied_filters:
             tags = "".join(
@@ -654,7 +897,7 @@ def render_chat() -> Optional[str]:
 def main() -> None:
     _hydrate_env_from_secrets()
     # Importing backend triggers its .env loader.
-    import agent.dialogue.llm  # noqa: F401
+    importlib.import_module("agent.dialogue.llm")
 
     init_state()
 
@@ -663,23 +906,15 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
-    ok, provider, message = _resolve_provider_status()
+    if st.session_state.show_settings_welcome:
+        render_settings_entry(in_sidebar=False)
+
+    ok, provider, message, display_model = render_backend_settings_panel()
     if not ok:
-        st.error(
-            f"**Backend not configured.** {message}\n\n"
-            "Example `backend/.env`:\n\n"
-            "```\nLLM_PROVIDER=qwen\nDASHSCOPE_API_KEY=your_key_here\n```"
-        )
         render_sidebar_panels(provider_label=provider or "not configured")
         render_chat()
         st.chat_input("Configure backend to start chatting.", disabled=True)
         return
-
-    # Figure out the display model name for the token logger.
-    display_model = (
-        os.environ.get("LLM_MODEL")
-        or ("gpt-4o-mini" if provider == "openai" else "qwen-plus")
-    )
 
     render_sidebar_panels(provider_label=f"{provider} · {display_model}")
     suggestion_pick = render_chat()
