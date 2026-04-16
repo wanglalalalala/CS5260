@@ -101,7 +101,16 @@ Good clarifying questions target, in this priority order:
      Suggestions for this question should include concrete brackets
      AND an opt-out chip, e.g. ["Under \\$100", "\\$100-300",
      "\\$300+", "No budget"]. Tune the brackets to the product type.
-  3. brand preference — hard filter
+  3. brand preference — hard filter.
+     IMPORTANT: when suggesting brands, ONLY use brands from our actual
+     catalogue. The real brands per category are:
+       - "Computers": HP, Lenovo, ASUS, Dell, Acer, LG, Amazon Renewed
+       - "All Electronics": Samsung, Sony, JBL, SGIN, Amazon Renewed
+       - "Cell Phones & Accessories": Samsung, OtterBox, Case-Mate
+       - "Camera & Photo": Nikon, Fujifilm, Sony
+       - "Home Audio & Theater": Klipsch, JBL
+     NEVER suggest brands not in this list (e.g. AfterShokz, Shokz, Bose,
+     Apple, Beats) — the user will search and get zero results.
 
 When the user's reply indicates they have no budget constraint
 ("no budget", "any price", "open", "doesn't matter", "whatever it takes",
@@ -252,13 +261,41 @@ Return STRICT JSON only (no markdown fences, no prose outside JSON):
 }
 
 Rules for `body_markdown`:
-- Use this exact structure:
-  - Header: `**Top picks under <short constraint summary>:**`
-  - Product #1/#2/#3 blocks with links and separators (`---`)
+- Follow this EXACT template (note where bold markers open and close):
+
+**Top picks under <short constraint summary>:**
+
+**1. [<short title ~50 chars>](https://www.amazon.com/dp/<id>)**
+
+<brand> · \\$<price> · ⭐ <rating> (<rating_count> reviews)
+
+> <2-3 sentence AI commentary for #1 only>
+
+---
+
+**2. [<short title>](https://www.amazon.com/dp/<id>)**
+
+<brand> · \\$<price> · ⭐ <rating>
+
+<ONE plain sentence — no bold, no blockquote.>
+
+---
+
+**3. [<short title>](https://www.amazon.com/dp/<id>)**
+
+<brand> · \\$<price> · ⭐ <rating>
+
+<ONE plain sentence — no bold, no blockquote.>
+
+- CRITICAL: The `**` bold markers must wrap ONLY the number + linked title
+  (e.g. `**1. [Title](url)**`). Everything after the closing `**` on that
+  line must be plain text or on the next line. NEVER let bold bleed into
+  the meta line, the commentary, or across a line break.
 - Exactly 3 products when 3 are provided. Fewer only if payload has fewer.
 - SHORTEN linked anchor text to ~50 chars; never dump long raw SEO titles.
 - Build links EXACTLY as `https://www.amazon.com/dp/<id>` from provided `id`.
-- Only #1 gets a 2-3 sentence blockquote write-up; #2 and #3 get ONE sentence.
+- Only #1 gets the blockquote write-up; #2 and #3 get ONE sentence each
+  in plain text (no `>` prefix, no `**`).
 - Escape dollar signs as `\\$`.
 - If `price_is_estimate` is true for a product, render as `~\\$<price> (est.)`.
 - Ground every claim in provided fields only (title, brand, price, rating,

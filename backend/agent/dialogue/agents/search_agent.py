@@ -25,10 +25,37 @@ from ..prompts import (
 # when this module is imported for unit tests.
 
 
-_NO_RESULTS_MSG = (
-    "I couldn't find products matching those constraints. "
-    "Want to relax the budget, change the brand, or try a different category?"
-)
+_CATALOGUE_BRANDS: dict[str, list[str]] = {
+    "Computers": ["HP", "Lenovo", "ASUS", "Dell", "Acer", "LG"],
+    "All Electronics": ["Samsung", "Sony", "JBL", "SGIN"],
+    "Cell Phones & Accessories": ["Samsung", "OtterBox", "Case-Mate"],
+    "Camera & Photo": ["Nikon", "Fujifilm", "Sony"],
+    "Home Audio & Theater": ["Klipsch", "JBL"],
+}
+
+
+def _no_results_reply(category: str | None, brand: str | None) -> str:
+    """Build a helpful no-results message that steers the user toward
+    brands and constraints we actually have in the database."""
+    parts = ["I couldn't find products matching those constraints."]
+    if brand:
+        cat_key = category or ""
+        available = _CATALOGUE_BRANDS.get(cat_key, [])
+        if available:
+            brand_list = ", ".join(available[:5])
+            parts.append(
+                f"We don't carry **{brand}** in our catalogue. "
+                f"Brands we do have in {cat_key}: {brand_list}."
+            )
+        else:
+            parts.append(
+                f"We don't carry **{brand}** — try dropping the brand filter."
+            )
+    parts.append(
+        "Would you like to try a different brand, adjust your budget, "
+        "or switch product type?"
+    )
+    return " ".join(parts)
 
 
 def _has_valid_price(value) -> bool:
@@ -162,12 +189,16 @@ class SearchAgent(BaseAgent):
                     user=responder_user(result.constraints_applied, products),
                 )
         else:
-            reply = _NO_RESULTS_MSG
-            suggestions = [
-                "Raise the budget a bit",
-                "Try a different brand",
-                "Switch product type",
-            ]
+            reply = _no_results_reply(provisional.category, provisional.brand)
+            cat_brands = _CATALOGUE_BRANDS.get(provisional.category or "", [])
+            if cat_brands:
+                suggestions = cat_brands[:3]
+            else:
+                suggestions = [
+                    "Raise the budget",
+                    "Try a different brand",
+                    "Switch product type",
+                ]
 
         return AgentOutput(
             state_delta={
