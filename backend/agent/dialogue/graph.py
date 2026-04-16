@@ -66,6 +66,9 @@ def _compare_node(gs: GraphState) -> GraphState:
         gs["debug"] = {"compared_ids": ids}
         return gs
 
+    from .agents.search_agent import _inject_estimated_prices
+    _inject_estimated_prices(products)
+
     table_md = _render_compare_table_md(products, _NOISY_SPEC_KEYS)
 
     try:
@@ -220,13 +223,17 @@ def _render_compare_table_md(products: list[dict], noisy_keys: set[str]) -> str:
         model = (p.get("model") or "").strip()
         return f"{brand} {model}".strip() or "Product"
 
-    def _fmt_price(v) -> str:
+    def _fmt_price(p: dict) -> str:
+        v = p.get("price")
         if v is None or v == "" or v == -1:
             return "N/A"
         try:
-            return f"\\${float(v):.2f}"
+            base = f"\\${float(v):.2f}"
         except (TypeError, ValueError):
             return str(v)
+        if p.get("price_is_estimate"):
+            return f"~{base} (est.)"
+        return base
 
     def _fmt_rating(p: dict) -> str:
         r = p.get("rating")
@@ -242,7 +249,7 @@ def _render_compare_table_md(products: list[dict], noisy_keys: set[str]) -> str:
     headers = ["Field"] + [_label(p) for p in products]
     rows: list[list[str]] = []
     rows.append(["Title"] + [_truncate(p.get("title"), 60) for p in products])
-    rows.append(["Price"] + [_fmt_price(p.get("price")) for p in products])
+    rows.append(["Price"] + [_fmt_price(p) for p in products])
     rows.append(["Rating"] + [_fmt_rating(p) for p in products])
 
     # Spec rows: only include keys that appear in at least 2 products and
